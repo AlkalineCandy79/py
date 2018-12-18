@@ -1,0 +1,360 @@
+## Scriptcreates buffers, intersects with building footprint and re-projects into projected CRS.
+## Can also be used for multi scenario/location blasts.
+import arcpy
+import sys,os
+import datetime
+from datetime import datetime
+
+arcpy.env.overwriteOutput = True
+
+########Script variables########
+####Testing/python input####
+##Pfc = r"O:\Global Analytics\General\Product and Services\GIS\JIRA_Internal\GIS_2931_TerrorismAnalytics_Amazon\01_input\Input.gdb\BlastLocations" ##Blast locations
+##idField = "BlastLoc" ##Blast ID field - can be object id or user defined/named field
+##pointID = "Front Entrance" ##ID of blast location to be used (Amazon = Front Entrance or Loading Bay)
+##bFootprints = r"O:\Global Analytics\General\Personal\WillS\TerrorTool_Testing\TerrorismTool_Testing.gdb\BuildingFootprint" ##Building footprint
+##
+##totalEx = "1038568000" ##Total building exposure
+##
+##buildType = "" ##Building construction type - this influences loss ratios
+##
+##outGDB = "O:\Global Analytics\General\Personal\WillS\TerrorTool_Testing\TerrorismTool_Testing.gdb"##Output Location (gdb)
+##
+##buffName = "ToolReWrite_Test_1Tn" ##Buffer name - this will persist for intersect name(s) too
+##
+##BlastZones = "DHS" ##Blast zones to use - DHS or Lloyds.
+##
+##BlastSize = "truck2Ton" ##Blast size - drop down list
+##
+####Point location(s) to use by ObjectID - used only in Single blast scenario.
+####Choose blast sizes accordingly as blastSize is applied in order of points (p1 = first).
+### bLoc = "" ##Blast location
+##
+##outCorName = "WebMerc" ##output coordinate system - drop down list
+##
+##lossTable = "true" ##Output loss table (to GDB)
+##
+##outShape = "true" ##Output to shapefile - T or F
+##
+##outCSV = "f" ##Output loss table as csv - T or F
+
+##Tool input##
+Pfc = arcpy.GetParameterAsText(0)##Blast locations
+idField = arcpy.GetParameterAsText(1) ##Blast ID field - can be object id or user defined/named field
+pointID = arcpy.GetParameterAsText(2) ##ID of blast location to be used (Amazon = Front Entrance or Loading Bay)
+bFootprints = arcpy.GetParameterAsText(3)##Building footprint
+totalEx = arcpy.GetParameterAsText(4) ##Total building exposure
+buildType = arcpy.GetParameterAsText(5) ##Building construction type - this influences loss ratios
+outGDB = arcpy.GetParameterAsText(6)##Output Location (gdb)
+buffName = arcpy.GetParameterAsText(7) ##Buffer name - this will persist for intersect name(s) too
+BlastZones = arcpy.GetParameterAsText(8) ##Blast zones to use - DHS or Lloyds.
+BlastSize = arcpy.GetParameterAsText(9) ##Blast size - drop down list
+##Point location(s) to use by ObjectID - used only in Single blast scenario.
+##Choose blast sizes accordingly as blastSize is applied in order of points (p1 = first).
+# bLoc = "" ##Blast location
+outCorName = arcpy.GetParameterAsText(10) ##output coordinate system - drop down list
+lossTable = arcpy.GetParameterAsText(11) ##Output loss table (to GDB)
+outShape = arcpy.GetParameterAsText(12) ##Output to shapefile - T or F
+outCSV = arcpy.GetParameterAsText(13) ##Output loss table as csv - T or F
+
+
+########Do not change from here on in########
+##NAD 83
+NAD83 = arcpy.SpatialReference(6350)
+
+##WGS 84 Web Mercator
+WebMerc = arcpy.SpatialReference(3857)
+
+##BNG
+BNG = arcpy.SpatialReference(27700)
+
+##Check if being run in ArcMap - if yes, change some variables
+##environ = sys.executable()
+if 'ArcMap.exe' in os.path.basename(sys.executable):
+    ##Alter Pfc
+    desc = arcpy.Describe(Pfc)
+    Pfc = str(desc.path) + "\\" + desc.name
+    ##Alter fc
+    desc = arcpy.Describe(Pfc)
+    fc = str(desc.path) + "\\" + desc.name
+    #Used to add output to Map.
+##    from arcpy import env
+##    env.addOutputsToMap = False
+    ##Set mxd and dataframe properties - for exporting buffers to map - NOT WORKING...yet
+##    mxd = arcpy.mapping.MapDocument("CURRENT")
+##    df = arcpy.mapping.ListDataFrames(mxd,"*")[0]
+    
+
+####Processing starts here...####
+##Set output coordinates
+if outCorName == "NAD83":
+    outCor = NAD83
+elif outCorName == "WebMerc":
+    outCor = WebMerc
+elif outCorName == "BNG":
+    outCor = BNG
+
+##Set csv and shapefile output location
+outFolder = os.path.join(outGDB.rsplit("\\",1)[0],str(buffName+"_output"))
+if os.path.exists(outFolder):
+    pass
+else:
+    arcpy.CreateFolder_management(outGDB.rsplit("\\",1)[0],str(buffName+"_output"))
+
+##UID field - used in update cursor
+BF_name = bFootprints.rsplit("\\",1)[1]
+
+####Set blast size(s) and associated loss ratios
+if BlastZones == "Lloyds":
+    if BlastSize == "Backpack":
+        blastSize = "36;65;104"
+        LR1 = 0.8
+        LR2 = 0.4
+        LR3 = 0.05
+    elif BlastSize == "truck1Ton":
+        blastSize = "121;213;338"
+        LR1 = 0.8
+        LR2 = 0.4
+        LR3 = 0.05
+    elif BlastSize == "truck2Ton":
+        blastSize = "656;1312;1640"
+        LR1 = 1
+        LR2 = 0.25
+        LR3 = 0.1
+
+if BlastZones == "DHS":
+    if BlastSize == "Backpack":
+        blastSize = "26;80;125"
+        LR1 = 1
+        LR2 = 0.25
+        LR3 = 0.1
+    elif BlastSize == "truck1Ton":
+        blastSize = "85;260;375"
+        LR1 = 1
+        LR2 = 0.25
+        LR3 = 0.1
+    elif BlastSize == "truck2Ton":
+        blastSize = "100;335;500"
+        LR1 = 1
+        LR2 = 0.25
+        LR3 = 0.1
+    elif BlastSize == "truck5Ton":
+        blastSize = "140;450;640"
+        LR1 = 1
+        LR2 = 0.25
+        LR3 = 0.1
+    elif BlastSize == "truck6Ton":
+        blastSize = "175;590;980"
+        LR1 = 1
+        LR2 = 0.25
+        LR3 = 0.1
+
+##Set loss ratios according to blast size
+##if buildType == "Unknown":
+##    LR1 = 0.8
+##    LR2 = 0.4
+##    LR3 = 0.05
+##elif buildType == "Concrete":
+##    LR1 = 0.75
+##    LR2 = 0.45
+##    LR3 = 0.035
+##elif buildType == "Reinforced Concrete":
+##    buildType = "ReinforcedConcrete"
+##    LR1 = 0.7
+##    LR2 = 0.25
+##    LR3 = 0.02
+##elif buildType == "Wooden":
+##    LR1 = 0.95
+##    LR2 = 0.65
+##    LR3 = 0.2
+
+##Set for area calc.
+geom = "AREA_GEODESIC"
+
+##Add new fields to building footprints - to store intersected blast radius
+tmp = blastSize.rsplit(";")
+Field1 = "BuildingArea"
+Field2 = "AREA_GEO"
+
+fList = [Field1,Field2]
+##sList = [Field1,Field2,Field3,Field4]
+
+TField1 = "DamageLevel"
+TField2 = "ImpactZoneByFeet"
+TField3 = "PropertyFootprint_Area"
+TField4 = "PropertyImpacted_Area"
+TField5 = "TotalExposure"
+TField6 = "ImpactRatio"
+TField7 = "ImpactExposure"
+TField8 = "LossRatio"
+TField9 = "Loss"
+TablefList = [TField1,TField2,TField3,TField4,TField5,TField6,TField7,TField8,TField9]
+
+tExp = float(totalEx)
+
+IZ1 = tmp[0]
+IZ2 = tmp[1]
+IZ3 = tmp[2]
+
+tableTemplate = r"O:\Global Analytics\General\Personal\WillS\TerrorTool_Testing\TerrorismTool_Testing.gdb\LossTable"
+
+#####Functions#####
+##Building intersection function##
+def buildIntersect(outInt,fields,fc):
+    with arcpy.da.SearchCursor(outInt,fields) as sCursor:
+        for row in sCursor:
+            bID = str(row[0])
+            BR = int(row[1])
+            intArea = row[2]
+            where = "OBJECTID = " + bID
+            with arcpy.da.UpdateCursor(fc,fList,where) as uCursor:
+                for row in uCursor:
+                    if BR == int(tmp[0]):
+                        row[0] = intArea
+                    elif BR == int(tmp[1]):
+                        row[1] = intArea
+                    elif BR == int(tmp[2]):
+                        row[2] = intArea
+                    uCursor.updateRow(row)
+
+    del sCursor, uCursor
+
+##Loss Table function##
+def LossTable(fc, TablefList, tableName):
+    bArea = []
+    intArea = []
+    with arcpy.da.SearchCursor(fc,fList) as sCursor:
+        for row in sCursor:
+            bArea.append(row[0])
+            intArea.append(row[1])
+    del sCursor
+
+    table = os.path.join(outGDB,tableName)
+    arcpy.CopyRows_management(tableTemplate,table)
+    with arcpy.da.UpdateCursor(table,TablefList) as uCursor:
+        for row in uCursor:
+            DL = row[0]
+            if DL == "Heavy":
+                row[1] = IZ1
+                row[2] = bArea[0]
+                row[3] = intArea[0]
+                row[4] = totalEx
+                row[5] = row[3]/row[2]
+                row[6] = int(row[4])*row[5]
+                row[7] = LR1
+                row[8] = row[6]*row[7]
+            elif DL == "Moderate":
+                row[1] = IZ2
+                row[2] = bArea[0]
+                row[3] = intArea[1]
+                row[4] = totalEx
+                row[5] = row[3]/row[2]
+                row[6] = int(row[4])*row[5]
+                row[7] = LR2
+                row[8] = row[6]*row[7]
+            elif DL == "Light":
+                row[1] = IZ3
+                row[2] = bArea[0]
+                row[3] = intArea[2]
+                row[4] = totalEx
+                row[5] = row[3]/row[2]
+                row[6] = int(row[4])*row[5]
+                row[7] = LR3
+                row[8] = row[6]*row[7]
+            uCursor.updateRow(row)
+    del uCursor
+    OutTableName = str(tableName) +".csv"
+    if str(outCSV) == "true":
+        arcpy.TableToTable_conversion(table,outFolder,OutTableName)
+        arcpy.AddMessage("Loss calculation table created and saved in: " + outFolder)
+
+##Output shapefile function##
+def OutShapes(fcList,outFolder):
+    for fc in fcList:
+        outShp = str(fc.rsplit("\\",1)[1])+".shp"
+        print(outShp)
+        arcpy.FeatureClassToFeatureClass_conversion(fc,outFolder,outShp)
+    
+
+try:
+    ##Blast Pressures
+    Pres_1 = 10
+    Pres_2 = 2
+    Pres_3 = 1
+    
+    ####Processing starts here####   
+    fcList = []
+    if type(pointID) == str:
+        pointID = "'"+pointID+"'"
+    print(pointID)
+    field = str(idField)
+    where = field +" = " + str(pointID)   
+    memoryFeature = "in_memory" + "\\" + "myMemoryFeature"
+
+    arcpy.Select_analysis(Pfc, memoryFeature, where)
+    
+    baseName = buffName
+    buffName = os.path.join(outGDB,str(baseName + "_Buffer"))
+    fcList.append(buffName)
+
+    ##Add geometry in selected CRS to building footprints
+    arcpy.AddGeometryAttributes_management(bFootprints,geom,"","",outCor)
+    arcpy.AddMessage("Geometry added")
+    ##Add field if needed
+    if len(arcpy.ListFields(bFootprints,"BuildingArea"))>0:
+        print("Building area field exists")
+    else:
+        arcpy.AddField_management(bFootprints, "BuildingArea", "DOUBLE")
+    arcpy.CalculateField_management(bFootprints, "BuildingArea", "!AREA_GEO!",expression_type="PYTHON_9.3")
+    fcList.append(bFootprints)
+    
+    print("Buffering...")
+    arcpy.MultipleRingBuffer_analysis(memoryFeature, buffName, Distances=blastSize, Buffer_Unit="Feet", Field_Name="BlastRadius", Dissolve_Option="ALL", Outside_Polygons_Only="FULL")
+
+    arcpy.AddMessage("Buffering done")
+    print("Buffering done")
+
+    tableName = baseName + "_LossTable"
+
+    arcpy.Delete_management(memoryFeature)
+        
+    ##Intersect buffer with building footprint
+    Buff = os.path.join(outGDB,str(baseName + "_Buffer"))
+
+    outInt = os.path.join(outGDB,str(baseName+"_BuildingIntersect"))
+    fcList.append(outInt)
+    print("Intersecting...")
+    arcpy.Intersect_analysis(in_features = [Buff, bFootprints], out_feature_class=outInt, join_attributes="ALL", output_type = "INPUT")
+
+    arcpy.AddGeometryAttributes_management(outInt,geom,"","",outCor)
+
+    ##Update bFootprints with intersected values where building ID and blast radius match
+##    uIDField = "FID_" + BF_name
+##    fields = [uIDField,'BlastRadius','AREA_GEO']
+
+##    buildIntersect(outInt,fields,bFootprints)
+    arcpy.AddMessage("Intersecting complete")
+    print("Intersecting complete")
+    
+    if str(lossTable) == "true":
+        tableName = str(baseName) + "_LossTable"
+        LossTable(outInt,TablefList,tableName)
+    
+    if str(outShape) == "true":            
+        OutShapes(fcList,outFolder)
+        arcpy.AddMessage("Feature classes copied to shapefile in the folder: " + outFolder)
+	
+    # arcpy.Delete_management(outInt)    
+            
+
+except Exception, e:
+    import traceback, sys, os
+    tb = sys.exc_info()[2]
+    print("Line %i" % tb.tb_lineno)
+    arcpy.AddMessage("Line %i" % tb.tb_lineno)
+    arcpy.AddMessage(str(e))
+    arcpy.AddMessage(arcpy.GetMessages())
+    print(str(e))
+
+finally:   
+    del arcpy
